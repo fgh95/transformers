@@ -15,7 +15,6 @@
 # limitations under the License.
 """ Fine-tuning the library models for named entity recognition on CoNLL-2003. """
 
-
 import logging
 import os
 import sys
@@ -36,8 +35,7 @@ from transformers import (
     TrainingArguments,
     set_seed,
 )
-from utils_ner import NerDataset, Split, get_labels
-
+from utils_ner import NerDataset, Split, get_labels, compute_all_f1s
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +80,7 @@ class DataTrainingArguments:
         default=128,
         metadata={
             "help": "The maximum total input sequence length after tokenization. Sequences longer "
-            "than this will be truncated, sequences shorter will be padded."
+                    "than this will be truncated, sequences shorter will be padded."
         },
     )
     overwrite_cache: bool = field(
@@ -104,13 +102,14 @@ def main():
         model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
     if (
-        os.path.exists(training_args.output_dir)
-        and os.listdir(training_args.output_dir)
-        and training_args.do_train
-        and not training_args.overwrite_output_dir
+            os.path.exists(training_args.output_dir)
+            and os.listdir(training_args.output_dir)
+            and training_args.do_train
+            and not training_args.overwrite_output_dir
     ):
         raise ValueError(
-            f"Output directory ({training_args.output_dir}) already exists and is not empty. Use --overwrite_output_dir to overcome."
+            f"Output directory ({training_args.output_dir}) already exists and is not empty. Use "
+            f"--overwrite_output_dir to overcome. "
         )
 
     # Setup logging
@@ -208,10 +207,16 @@ def main():
 
     def compute_metrics(p: EvalPrediction) -> Dict:
         preds_list, out_label_list = align_predictions(p.predictions, p.label_ids)
+        uq_l = list(set([y.replace('I-', '') for y in [x.replace('B-', '') for x in set(labels)] if y != 'O']))
+        out_dict = compute_all_f1s(predictions=preds_list, true=out_label_list, list_uq=uq_l)
         return {
             "precision": precision_score(out_label_list, preds_list),
             "recall": recall_score(out_label_list, preds_list),
             "f1": f1_score(out_label_list, preds_list),
+            "f1_exact": out_dict['exact']['f1'],
+            "f1_strict": out_dict['strict']['f1'],
+            "f1_partial": out_dict['partial']['f1'],
+            "f1_ent_type": out_dict['ent_type']['f1']
         }
 
     # Initialize our Trainer

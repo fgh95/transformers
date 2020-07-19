@@ -153,3 +153,15 @@ debug.env
 
 #ctags
 tags
+/examples/token-classification/germeval-model/
+/examples/token-classification/cached_dev_BertTokenizer_128
+/examples/token-classification/cached_dev_BertTokenizer_128.lock
+/examples/token-classification/cached_test_BertTokenizer_128
+/examples/token-classification/cached_test_BertTokenizer_128.lock
+/examples/token-classification/cached_train_BertTokenizer_128
+/examples/token-classification/cached_train_BertTokenizer_128.lock
+/examples/token-classification/config.json
+/examples/token-classification/dev.txt
+/examples/token-classification/labels.txt
+/examples/token-classification/test.txt
+/examples/token-classification/train.txt

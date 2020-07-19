@@ -15,17 +15,17 @@
 # limitations under the License.
 """ Named entity recognition fine-tuning: utilities to work with CoNLL-2003 task. """
 
-
+from copy import deepcopy
 import logging
 import os
 from dataclasses import dataclass
 from enum import Enum
 from typing import List, Optional, Union
-
+from ner_evaluation.ner_eval import collect_named_entities
+from ner_evaluation.ner_eval import compute_metrics
 from filelock import FileLock
-
 from transformers import PreTrainedTokenizer, is_tf_available, is_torch_available
-
+from ner_evaluation.ner_eval import compute_precision_recall_wrapper, Evaluator
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +71,7 @@ if is_torch_available():
     from torch import nn
     from torch.utils.data.dataset import Dataset
 
+
     class NerDataset(Dataset):
         """
         This will be superseded by a framework-agnostic approach
@@ -79,18 +80,19 @@ if is_torch_available():
 
         features: List[InputFeatures]
         pad_token_label_id: int = nn.CrossEntropyLoss().ignore_index
+
         # Use cross entropy ignore_index as padding label id so that only
         # real label ids contribute to the loss later.
 
         def __init__(
-            self,
-            data_dir: str,
-            tokenizer: PreTrainedTokenizer,
-            labels: List[str],
-            model_type: str,
-            max_seq_length: Optional[int] = None,
-            overwrite_cache=False,
-            mode: Split = Split.train,
+                self,
+                data_dir: str,
+                tokenizer: PreTrainedTokenizer,
+                labels: List[str],
+                model_type: str,
+                max_seq_length: Optional[int] = None,
+                overwrite_cache=False,
+                mode: Split = Split.train,
         ):
             # Load data features from cache or dataset file
             cached_features_file = os.path.join(
@@ -120,7 +122,8 @@ if is_torch_available():
                         cls_token_segment_id=2 if model_type in ["xlnet"] else 0,
                         sep_token=tokenizer.sep_token,
                         sep_token_extra=False,
-                        # roberta uses an extra separator b/w pairs of sentences, cf. github.com/pytorch/fairseq/commit/1684e166e3da03f5b600dbb7855cb98ddfcd0805
+                        # roberta uses an extra separator b/w pairs of sentences,
+                        # cf. github.com/pytorch/fairseq/commit/1684e166e3da03f5b600dbb7855cb98ddfcd0805
                         pad_on_left=bool(tokenizer.padding_side == "left"),
                         pad_token=tokenizer.pad_token_id,
                         pad_token_segment_id=tokenizer.pad_token_type_id,
@@ -135,9 +138,9 @@ if is_torch_available():
         def __getitem__(self, i) -> InputFeatures:
             return self.features[i]
 
-
 if is_tf_available():
     import tensorflow as tf
+
 
     class TFNerDataset:
         """
@@ -147,18 +150,19 @@ if is_tf_available():
 
         features: List[InputFeatures]
         pad_token_label_id: int = -1
+
         # Use cross entropy ignore_index as padding label id so that only
         # real label ids contribute to the loss later.
 
         def __init__(
-            self,
-            data_dir: str,
-            tokenizer: PreTrainedTokenizer,
-            labels: List[str],
-            model_type: str,
-            max_seq_length: Optional[int] = None,
-            overwrite_cache=False,
-            mode: Split = Split.train,
+                self,
+                data_dir: str,
+                tokenizer: PreTrainedTokenizer,
+                labels: List[str],
+                model_type: str,
+                max_seq_length: Optional[int] = None,
+                overwrite_cache=False,
+                mode: Split = Split.train,
         ):
             examples = read_examples_from_file(data_dir, mode)
             # TODO clean up all this to leverage built-in features of tokenizers
@@ -260,21 +264,21 @@ def read_examples_from_file(data_dir, mode: Union[Split, str]) -> List[InputExam
 
 
 def convert_examples_to_features(
-    examples: List[InputExample],
-    label_list: List[str],
-    max_seq_length: int,
-    tokenizer: PreTrainedTokenizer,
-    cls_token_at_end=False,
-    cls_token="[CLS]",
-    cls_token_segment_id=1,
-    sep_token="[SEP]",
-    sep_token_extra=False,
-    pad_on_left=False,
-    pad_token=0,
-    pad_token_segment_id=0,
-    pad_token_label_id=-100,
-    sequence_a_segment_id=0,
-    mask_padding_with_zero=True,
+        examples: List[InputExample],
+        label_list: List[str],
+        max_seq_length: int,
+        tokenizer: PreTrainedTokenizer,
+        cls_token_at_end=False,
+        cls_token="[CLS]",
+        cls_token_segment_id=1,
+        sep_token="[SEP]",
+        sep_token_extra=False,
+        pad_on_left=False,
+        pad_token=0,
+        pad_token_segment_id=0,
+        pad_token_label_id=-100,
+        sequence_a_segment_id=0,
+        mask_padding_with_zero=True,
 ) -> List[InputFeatures]:
     """ Loads a data file into a list of `InputFeatures`
         `cls_token_at_end` define the location of the CLS token:
@@ -396,3 +400,50 @@ def get_labels(path: str) -> List[str]:
         return labels
     else:
         return ["O", "B-MISC", "I-MISC", "B-PER", "I-PER", "B-ORG", "I-ORG", "B-LOC", "I-LOC"]
+
+
+def compute_all_f1s(predictions, true, list_uq):
+    evaluator = Evaluator(true, predictions, list_uq)
+    results, results_agg = evaluator.evaluate()
+
+    for key in results.keys():
+        if results[key]['precision'] == 0 and results[key]['recall'] == 0:
+            results[key]['f1'] = 0
+        else:
+            results[key]['f1'] = 2 * (results[key]['precision'] * results[key]['recall']) / (
+                    results[key]['precision'] + results[key]['recall'])
+
+    return results
+#  metrics_results = {'correct': 0, 'incorrect': 0, 'partial': 0,
+#                     'missed': 0, 'spurious': 0, 'possible': 0, 'actual': 0, 'precision': 0, 'recall': 0}
+#  # overall results
+#  results = {'strict': deepcopy(metrics_results),
+#             'ent_type': deepcopy(metrics_results),
+#             'partial': deepcopy(metrics_results),
+#             'exact': deepcopy(metrics_results)
+#             }
+#  # results aggregated by entity type
+#  evaluation_agg_entities_type = {e: deepcopy(results) for e in list_uq}
+#  for true_ents, pred_ents in zip(true, predictions):
+#      # compute results for sentence
+#      tmp_results, tmp_agg_results = compute_metrics(
+#          collect_named_entities(true_ents), collect_named_entities(pred_ents), list_uq
+#      )
+#      # aggregate overall results
+#      for eval_schema in results.keys():
+#          for metric in metrics_results.keys():
+#              results[eval_schema][metric] += tmp_results[eval_schema][metric]
+#      # Calculate global precision and recall
+#      results = compute_precision_recall_wrapper(results)
+#      # aggregate results by entity type
+#      for e_type in list_uq:
+#          for eval_schema in tmp_agg_results[e_type]:
+#              for metric in tmp_agg_results[e_type][eval_schema]:
+#                  evaluation_agg_entities_type[e_type][eval_schema][metric] += tmp_agg_results[e_type][eval_schema][
+#                      metric]
+
+#          # Calculate precision recall at the individual entity level
+
+#          evaluation_agg_entities_type[e_type] = compute_precision_recall_wrapper(
+#              evaluation_agg_entities_type[e_type])
+# add f1

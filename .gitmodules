@@ -1,0 +1,3 @@
+[submodule "examples/token-classification/examples/token-classification/NER-Evaluation"]
+	path = examples/token-classification/examples/token-classification/NER-Evaluation
+	url = https://github.com/davidsbatista/NER-Evaluation

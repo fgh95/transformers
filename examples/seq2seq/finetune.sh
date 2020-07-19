@@ -10,4 +10,5 @@ python finetune.py \
     --do_predict \
     --n_val 1000 \
     --val_check_interval 0.1 \
+    --sortish_sampler \
     $@

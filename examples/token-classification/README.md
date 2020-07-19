@@ -1,5 +1,8 @@
 ## Named Entity Recognition
 
+_Please note this section (and the trainer class) have been modified from the original transformers repo to be able to do early stopping, compute partial and exact matching for F1-score and export the results on validation and test after each epoch. The NER-Evaluation folder has been cloned from this excellent repo: https://github.com/davidsbatista/NER-Evaluation _
+
+
 Based on the scripts [`run_ner.py`](https://github.com/huggingface/transformers/blob/master/examples/token-classification/run_ner.py) for Pytorch and
 [`run_tf_ner.py`](https://github.com/huggingface/transformers/blob/master/examples/token-classification/run_tf_ner.py) for Tensorflow 2.
 

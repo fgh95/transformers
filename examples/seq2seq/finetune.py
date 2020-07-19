@@ -21,6 +21,7 @@ try:
     from .utils import (
         assert_all_frozen,
         use_task_specific_params,
+        SummarizationDataset,
         lmap,
         flatten_list,
         pickle_save,
@@ -31,17 +32,12 @@ try:
         get_git_info,
         ROUGE_KEYS,
         calculate_bleu_score,
-        Seq2SeqDataset,
-        MBartDataset,
     )
-
     from .callbacks import Seq2SeqLoggingCallback, get_checkpoint_callback
 except ImportError:
     from utils import (
-        Seq2SeqDataset,
-        MBartDataset,
-        assert_all_frozen,
         use_task_specific_params,
+        SummarizationDataset,
         lmap,
         flatten_list,
         pickle_save,
@@ -52,6 +48,7 @@ except ImportError:
         get_git_info,
         ROUGE_KEYS,
         calculate_bleu_score,
+        assert_all_frozen,
     )
     from callbacks import Seq2SeqLoggingCallback, get_checkpoint_callback
 
@@ -103,7 +100,6 @@ class SummarizationModule(BaseTransformer):
         self.hparams.git_sha = get_git_info()["repo_sha"]
         self.num_workers = hparams.num_workers
         self.decoder_start_token_id = None
-        self.dataset_class = Seq2SeqDataset
 
     def freeze_embeds(self):
         """Freeze token embeddings and positional embeddings for bart, just token embeddings for t5."""
@@ -167,7 +163,7 @@ class SummarizationModule(BaseTransformer):
 
     def _generative_step(self, batch: dict) -> dict:
         pad_token_id = self.tokenizer.pad_token_id
-        source_ids, source_mask, y = Seq2SeqDataset.trim_seq2seq_batch(batch, pad_token_id)
+        source_ids, source_mask, y = SummarizationDataset.trim_seq2seq_batch(batch, pad_token_id)
         t0 = time.time()
         generated_ids = self.model.generate(
             input_ids=source_ids,
@@ -191,10 +187,10 @@ class SummarizationModule(BaseTransformer):
     def test_epoch_end(self, outputs):
         return self.validation_epoch_end(outputs, prefix="test")
 
-    def get_dataset(self, type_path) -> Seq2SeqDataset:
+    def get_dataset(self, type_path) -> SummarizationDataset:
         n_obs = self.n_obs[type_path]
         max_target_length = self.target_lens[type_path]
-        dataset = self.dataset_class(
+        dataset = SummarizationDataset(
             self.tokenizer,
             type_path=type_path,
             n_obs=n_obs,
@@ -225,8 +221,8 @@ class SummarizationModule(BaseTransformer):
         dataloader = self.get_dataloader("train", batch_size=self.hparams.train_batch_size, shuffle=True)
         t_total = (
             (len(dataloader.dataset) // (self.hparams.train_batch_size * max(1, self.hparams.gpus)))
-            // self.hparams.accumulate_grad_batches
-            * float(self.hparams.max_epochs)
+            // self.hparams.gradient_accumulation_steps
+            * float(self.hparams.num_train_epochs)
         )
         scheduler = get_linear_schedule_with_warmup(
             self.opt, num_warmup_steps=self.hparams.warmup_steps, num_training_steps=t_total
@@ -283,7 +279,7 @@ class SummarizationModule(BaseTransformer):
         parser.add_argument("--freeze_encoder", action="store_true")
         parser.add_argument("--freeze_embeds", action="store_true")
         parser.add_argument("--sortish_sampler", action="store_true", default=False)
-        parser.add_argument("--logger_name", type=str, choices=["default", "wandb", "wandb_shared"], default="default")
+        parser.add_argument("--logger", type=str, choices=["default", "wandb", "wandb_shared"], default="default")
         parser.add_argument("--n_train", type=int, default=-1, required=False, help="# examples. -1 means use all.")
         parser.add_argument("--n_val", type=int, default=500, required=False, help="# examples. -1 means use all.")
         parser.add_argument("--n_test", type=int, default=-1, required=False, help="# examples. -1 means use all.")
@@ -292,6 +288,7 @@ class SummarizationModule(BaseTransformer):
         )
         parser.add_argument("--src_lang", type=str, default="", required=False)
         parser.add_argument("--tgt_lang", type=str, default="", required=False)
+
         return parser
 
 
@@ -307,8 +304,6 @@ class TranslationModule(SummarizationModule):
         self.dataset_kwargs["tgt_lang"] = hparams.tgt_lang
         if self.model.config.decoder_start_token_id is None and isinstance(self.tokenizer, MBartTokenizer):
             self.decoder_start_token_id = self.tokenizer.lang_code_to_id[hparams.tgt_lang]
-        if isinstance(self.tokenizer, MBartTokenizer):
-            self.dataset_class = MBartDataset
 
     def calc_generative_metrics(self, preds, target) -> dict:
         return calculate_bleu_score(preds, target)
@@ -323,24 +318,22 @@ def main(args, model=None) -> SummarizationModule:
             model: SummarizationModule = SummarizationModule(args)
         else:
             model: SummarizationModule = TranslationModule(args)
-
-    dataset = Path(args.data_dir).name
     if (
-        args.logger_name == "default"
+        args.logger == "default"
         or args.fast_dev_run
         or str(args.output_dir).startswith("/tmp")
         or str(args.output_dir).startswith("/var")
     ):
         logger = True  # don't pollute wandb logs unnecessarily
-    elif args.logger_name == "wandb":
+    elif args.logger == "wandb":
         from pytorch_lightning.loggers import WandbLogger
 
-        logger = WandbLogger(name=model.output_dir.name, project=dataset)
+        logger = WandbLogger(name=model.output_dir.name)
 
-    elif args.logger_name == "wandb_shared":
+    elif args.logger == "wandb_shared":
         from pytorch_lightning.loggers import WandbLogger
 
-        logger = WandbLogger(name=model.output_dir.name, project=f"hf_{dataset}")
+        logger = WandbLogger(name=model.output_dir.name)
     trainer: pl.Trainer = generic_train(
         model,
         args,
@@ -359,17 +352,13 @@ def main(args, model=None) -> SummarizationModule:
         model.hparams.test_checkpoint = checkpoints[-1]
         trainer.resume_from_checkpoint = checkpoints[-1]
     trainer.logger.log_hyperparams(model.hparams)
-
-    # test() without a model tests using the best checkpoint automatically
-    trainer.test()
+    trainer.test(model)  # this breaks in DDP, known lightning issue. See evaluate_checkpoint to recover metrics.
     return model
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser = pl.Trainer.add_argparse_args(parser)
     parser = SummarizationModule.add_model_specific_args(parser, os.getcwd())
-
     args = parser.parse_args()
 
     main(args)

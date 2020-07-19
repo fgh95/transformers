@@ -7,6 +7,7 @@ import warnings
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+import pandas as pd
 
 import numpy as np
 import torch
@@ -32,10 +33,8 @@ from .trainer_utils import (
 )
 from .training_args import TrainingArguments
 
-
 if is_apex_available():
     from apex import amp
-
 
 if is_torch_tpu_available():
     import torch_xla.core.xla_model as xm
@@ -61,7 +60,6 @@ def is_tensorboard_available():
 
 if is_wandb_available():
     import wandb
-
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +114,7 @@ class SequentialDistributedSampler(Sampler):
         assert len(indices) == self.total_size
 
         # subsample
-        indices = indices[self.rank * self.num_samples : (self.rank + 1) * self.num_samples]
+        indices = indices[self.rank * self.num_samples: (self.rank + 1) * self.num_samples]
         assert len(indices) == self.num_samples
 
         return iter(indices)
@@ -174,16 +172,16 @@ class Trainer:
     epoch: Optional[float] = None
 
     def __init__(
-        self,
-        model: PreTrainedModel,
-        args: TrainingArguments,
-        data_collator: Optional[DataCollator] = None,
-        train_dataset: Optional[Dataset] = None,
-        eval_dataset: Optional[Dataset] = None,
-        compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
-        prediction_loss_only=False,
-        tb_writer: Optional["SummaryWriter"] = None,
-        optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = None,
+            self,
+            model: PreTrainedModel,
+            args: TrainingArguments,
+            data_collator: Optional[DataCollator] = None,
+            train_dataset: Optional[Dataset] = None,
+            eval_dataset: Optional[Dataset] = None,
+            compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
+            prediction_loss_only=False,
+            tb_writer: Optional["SummaryWriter"] = None,
+            optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = None,
     ):
         self.model = model.to(args.device)
         self.args = args
@@ -220,8 +218,8 @@ class Trainer:
             self.data_collator = self.data_collator.collate_batch
             warnings.warn(
                 (
-                    "The `data_collator` should now be a simple callable (function, class with `__call__`), classes "
-                    + "with a `collate_batch` are deprecated and won't be supported in a future version."
+                        "The `data_collator` should now be a simple callable (function, class with `__call__`), classes "
+                        + "with a `collate_batch` are deprecated and won't be supported in a future version."
                 ),
                 FutureWarning,
             )
@@ -311,7 +309,7 @@ class Trainer:
         return data_loader
 
     def get_optimizers(
-        self, num_training_steps: int
+            self, num_training_steps: int
     ) -> Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]:
         """
         Setup the optimizer and the learning rate scheduler.
@@ -385,7 +383,7 @@ class Trainer:
         if self.args.max_steps > 0:
             t_total = self.args.max_steps
             num_train_epochs = (
-                self.args.max_steps // (len(train_dataloader) // self.args.gradient_accumulation_steps) + 1
+                    self.args.max_steps // (len(train_dataloader) // self.args.gradient_accumulation_steps) + 1
             )
         else:
             t_total = int(len(train_dataloader) // self.args.gradient_accumulation_steps * self.args.num_train_epochs)
@@ -395,9 +393,9 @@ class Trainer:
 
         # Check if saved optimizer or scheduler states exist
         if (
-            model_path is not None
-            and os.path.isfile(os.path.join(model_path, "optimizer.pt"))
-            and os.path.isfile(os.path.join(model_path, "scheduler.pt"))
+                model_path is not None
+                and os.path.isfile(os.path.join(model_path, "optimizer.pt"))
+                and os.path.isfile(os.path.join(model_path, "scheduler.pt"))
         ):
             # Load in optimizer and scheduler states
             optimizer.load_state_dict(
@@ -433,9 +431,9 @@ class Trainer:
             total_train_batch_size = self.args.train_batch_size * xm.xrt_world_size()
         else:
             total_train_batch_size = (
-                self.args.train_batch_size
-                * self.args.gradient_accumulation_steps
-                * (torch.distributed.get_world_size() if self.args.local_rank != -1 else 1)
+                    self.args.train_batch_size
+                    * self.args.gradient_accumulation_steps
+                    * (torch.distributed.get_world_size() if self.args.local_rank != -1 else 1)
             )
         logger.info("***** Running training *****")
         logger.info("  Num examples = %d", self.num_examples(train_dataloader))
@@ -456,7 +454,7 @@ class Trainer:
                 self.global_step = int(model_path.split("-")[-1].split("/")[0])
                 epochs_trained = self.global_step // (len(train_dataloader) // self.args.gradient_accumulation_steps)
                 steps_trained_in_current_epoch = self.global_step % (
-                    len(train_dataloader) // self.args.gradient_accumulation_steps
+                        len(train_dataloader) // self.args.gradient_accumulation_steps
                 )
 
                 logger.info("  Continuing training from checkpoint, will skip to saved global_step")
@@ -499,9 +497,8 @@ class Trainer:
                 tr_loss += self._training_step(model, inputs, optimizer)
 
                 if (step + 1) % self.args.gradient_accumulation_steps == 0 or (
-                    # last step in epoch but step is always smaller than gradient_accumulation_steps
-                    len(epoch_iterator) <= self.args.gradient_accumulation_steps
-                    and (step + 1) == len(epoch_iterator)
+                        # last step in epoch but step is always smaller than gradient_accumulation_steps
+                        self.args.gradient_accumulation_steps >= len(epoch_iterator) == (step + 1)
                 ):
                     if self.args.fp16:
                         torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), self.args.max_grad_norm)
@@ -519,22 +516,24 @@ class Trainer:
                     self.epoch = epoch + (step + 1) / len(epoch_iterator)
 
                     if (self.args.logging_steps > 0 and self.global_step % self.args.logging_steps == 0) or (
-                        self.global_step == 1 and self.args.logging_first_step
+                            self.global_step == 1 and self.args.logging_first_step
                     ):
-                        logs: Dict[str, float] = {}
-                        logs["loss"] = (tr_loss - logging_loss) / self.args.logging_steps
+                        logs: Dict[str, float] = {"loss": (tr_loss - logging_loss) / self.args.logging_steps,
+                                                  "learning_rate": (
+                                                      scheduler.get_last_lr()[0]
+                                                      if version.parse(torch.__version__) >= version.parse("1.4")
+                                                      else scheduler.get_lr()[0]
+                                                  )}
                         # backward compatibility for pytorch schedulers
-                        logs["learning_rate"] = (
-                            scheduler.get_last_lr()[0]
-                            if version.parse(torch.__version__) >= version.parse("1.4")
-                            else scheduler.get_lr()[0]
-                        )
                         logging_loss = tr_loss
 
                         self._log(logs)
 
                     if self.args.evaluate_during_training and self.global_step % self.args.eval_steps == 0:
-                        self.evaluate()
+                        eval_metrics = self.evaluate(self.eval_dataset)
+                        self.write_eval("eval_progress.csv", eval_metrics)
+                        train_metrics = self.evaluate(self.train_dataset)
+                        self.write_eval("train_progress.csv", train_metrics)
 
                     if self.args.save_steps > 0 and self.global_step % self.args.save_steps == 0:
                         # In all cases (even distributed/parallel), self.model is always a reference
@@ -559,15 +558,19 @@ class Trainer:
                             torch.save(optimizer.state_dict(), os.path.join(output_dir, "optimizer.pt"))
                             torch.save(scheduler.state_dict(), os.path.join(output_dir, "scheduler.pt"))
 
-                if self.args.max_steps > 0 and self.global_step > self.args.max_steps:
+                if 0 < self.args.max_steps < self.global_step:
                     epoch_iterator.close()
                     break
-            if self.args.max_steps > 0 and self.global_step > self.args.max_steps:
+            if 0 < self.args.max_steps < self.global_step:
                 train_iterator.close()
                 break
             if self.args.tpu_metrics_debug or self.args.debug:
                 # tpu-comment: Logging debug metrics for PyTorch/XLA (compile, execute times, ops, etc.)
                 xm.master_print(met.metrics_report())
+
+            # ======= Evaluate model at the end of each epoch and write metrics ==============#
+        #         self.evaluate(self.eval_dataset)
+        #         self.evaluate(self.train_dataset)
 
         if self.tb_writer:
             self.tb_writer.close()
@@ -609,7 +612,7 @@ class Trainer:
             logger.info(output)
 
     def _training_step(
-        self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]], optimizer: torch.optim.Optimizer
+            self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]], optimizer: torch.optim.Optimizer
     ) -> float:
         model.train()
         for k, v in inputs.items():
@@ -755,6 +758,20 @@ class Trainer:
 
         return output.metrics
 
+    def write_eval(self, file_name, eval_metrics):
+        output_path = os.path.join(self.args.output_dir, file_name)
+        if not os.path.isfile(output_path):
+            with open(output_path, mode='a') as file_:
+                file_.write("Epoch,Loss,Precision,Recall,F1,F1_exact,F1_strict,F1_partial,F1_Entype\n")
+        with open(output_path, mode='a') as file_:
+            file_.write(
+                "{},{},{},{},{},{},{},{},{}".format(eval_metrics['epoch'], eval_metrics['eval_loss'],
+                                                    eval_metrics['eval_precision'], eval_metrics['eval_recall'],
+                                                    eval_metrics['eval_f1'], eval_metrics['eval_f1_exact'],
+                                                    eval_metrics['eval_f1_strict'],
+                                                    eval_metrics['eval_f1_partial'], eval_metrics['eval_f1_ent_type']))
+            file_.write("\n")
+
     def predict(self, test_dataset: Dataset) -> PredictionOutput:
         """
         Run prediction and returns predictions and potential metrics.
@@ -779,7 +796,7 @@ class Trainer:
         return self._prediction_loop(test_dataloader, description="Prediction")
 
     def _prediction_loop(
-        self, dataloader: DataLoader, description: str, prediction_loss_only: Optional[bool] = None
+            self, dataloader: DataLoader, description: str, prediction_loss_only: Optional[bool] = None
     ) -> PredictionOutput:
         """
         Prediction/evaluation loop, shared by `evaluate()` and `predict()`.
